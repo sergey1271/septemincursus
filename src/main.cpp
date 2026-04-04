@@ -3,119 +3,292 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <ESP32Servo.h>
+#include <SPI.h>
+#include <MFRC522.h>
 
-Adafruit_SHT31 sht31 = Adafruit_SHT31();
+#define SERVICE_UUID        "e3924aeb-5732-4cb9-9058-46ff8ffc686a"
+#define CHARACTERISTIC_UUID "9bfb5585-ee07-4bdf-b32d-5181fdb54c0a"
+#define DEVICE_NAME "ESP32_Car_7inc"
 
-// Настройки BLE
-BLEServer *pServer = nullptr;
-BLECharacteristic *pTemperatureCharacteristic = nullptr;
-BLECharacteristic *pHumidityCharacteristic = nullptr;
+const int SS_PIN = 21;  // SDA
+const int RST_PIN = 4;   // Подключите RST к GPIO 4
+const int SCK_PIN = 17;  // пин для тактов
+const int MISO_PIN = 16;  // пин для данных (вход)
+const int MOSI_PIN = 23 ; // пин для данных (выход)
+
+MFRC522 rfid(SS_PIN, RST_PIN);
+
+const int MOTOR_A_PWM = 33;
+const int MOTOR_A_1 = 26;
+const int MOTOR_A_2 = 25;
+const int MOTOR_B_PWM = 32;
+const int MOTOR_B_1 = 12;
+const int MOTOR_B_2 = 13;
+
+const int SERVO_VERTICAL = 19;
+const int SERVO_HORIZONTAL = 18;
+
+BLEServer *pServer = NULL;
+BLECharacteristic *pCharacteristic = NULL;
 bool deviceConnected = false;
-bool oldDeviceConnected = false;
 
-const int LEDq = 2; // Пин предустановленного на плату светодиода
-unsigned long previousMillis = 0;
-const long interval = 1000; // Интервал обновления показаний (мс)
+// Сервоприводы
+Servo verticalServo;
+Servo horizontalServo;
+int verticalPos = 90;
+int horizontalPos = 90;
+const int STEP_SIZE = 7;
+const int MIN_ANGLE = 0;
+const int MAX_ANGLE = 180;
 
-// UUID для сервиса и характеристик
-#define SERVICE_UUID "6f59f19e-2f39-49de-8525-5d2045f4d999"
-#define HUMIDITY_UUID "cba1d466-344c-4be3-ab3f-189f80dd7518"
+bool movingUp = false;
+bool movingDown = false;
+bool movingLeft = false;
+bool movingRight = false;
 
-// ИЗ СТАРОЙ ПРОГРАММЫ
-// #define SERVICE_CONTROL_UUID   "6f59f19e-2f39-49de-8525-5d2045f4d999" 
-// #define SERVICE_WORK_TIME_UUID "f790145d-61dd-4464-9414-c058448ee9f2"
+void processCommand(String command);
+void setMotorSpeeds(int left, int right);
+void updateServos();
 
-// #define CONTROL_REQUEST_UUID "420ece2e-c66c-4059-9ceb-5fc19251e453"
-// #define CONTROL_RESPONSE_UUID "a9bf2905-ee69-4baa-8960-4358a9e3a558"
 
-// #define WORK_TIME_UUID "5e9f22d4-a305-4113-8fa2-55c5d497c3f2"
-
-// Класс для обработки событий BLE
-class MyServerCallbacks : public BLEServerCallbacks
-{
-    void onConnect(BLEServer *pServer)
-    {
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
         deviceConnected = true;
-        Serial.println("Устройство ВКЛючено");
-        digitalWrite(LEDq, HIGH);
+        Serial.println("[BLE] Телефон подключен");
     }
 
-    void onDisconnect(BLEServer *pServer)
-    {
+    void onDisconnect(BLEServer* pServer) {
         deviceConnected = false;
-        Serial.println("Устройство ОТКЛючено");
-        digitalWrite(LEDq, LOW);
-
-        pServer->startAdvertising(); // Перезапуск рекламы для повторного подключения
+        Serial.println("[BLE] Телефон отключен");
+        
+        movingUp = false;
+        movingDown = false;
+        movingLeft = false;
+        movingRight = false;
+        setMotorSpeeds(0, 0);
+        
+        pServer->getAdvertising()->start();
     }
 };
 
-void setup()
-{
-    Serial.begin(115200);
-    pinMode(LEDq, OUTPUT);
+class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *pCharacteristic) {
+        std::string value = pCharacteristic->getValue();
+        
+        if (value.length() > 0) {
+            String command = String(value.c_str());
+            processCommand(command);
+        }
+    }
+};
 
-    // Настройка BLE
-    BLEDevice::init("ESP32-SHT30-BLE");
-    pServer = BLEDevice::createServer();
-    pServer->setCallbacks(new MyServerCallbacks());
-
-    // Создание BLE-сервиса
-    BLEService *pService = pServer->createService(SERVICE_UUID);
-
-
-    // Запуск сервиса
-    pService->start();
-
-    // Начало рекламы устройства
-    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-    pAdvertising->addServiceUUID(SERVICE_UUID);
-    pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06); // Параметры для улучшения совместимости
-    pAdvertising->setMinPreferred(0x12);
-    BLEDevice::startAdvertising();
-
-    Serial.println("BLE-сервер запущен. Ожидание подключений...");
+void setMotorSpeeds(int left, int right) {
+    if (left > 0) {
+        digitalWrite(MOTOR_A_1, HIGH);
+        digitalWrite(MOTOR_A_2, LOW);
+        analogWrite(MOTOR_A_PWM, map(left, 0, 10, 0, 255));
+    } else if (left < 0) {
+        digitalWrite(MOTOR_A_1, LOW);
+        digitalWrite(MOTOR_A_2, HIGH);
+        analogWrite(MOTOR_A_PWM, map(-left, 0, 10, 0, 255));
+    } else {
+        digitalWrite(MOTOR_A_1, LOW);
+        digitalWrite(MOTOR_A_2, LOW);
+        analogWrite(MOTOR_A_PWM, 0);
+    }
+    
+    if (right > 0) {
+        digitalWrite(MOTOR_B_1, HIGH);
+        digitalWrite(MOTOR_B_2, LOW);
+        analogWrite(MOTOR_B_PWM, map(right, 0, 10, 0, 255));
+    } else if (right < 0) {
+        digitalWrite(MOTOR_B_1, LOW);
+        digitalWrite(MOTOR_B_2, HIGH);
+        analogWrite(MOTOR_B_PWM, map(-right, 0, 10, 0, 255));
+    } else {
+        digitalWrite(MOTOR_B_1, LOW);
+        digitalWrite(MOTOR_B_2, LOW);
+        analogWrite(MOTOR_B_PWM, 0);
+    }
 }
 
-void loop()
-{
-    // Обработка подключения/отключения
-    if (!deviceConnected && oldDeviceConnected)
-    {
-        delay(500); // Даем время для стабилизации соединения
-        oldDeviceConnected = deviceConnected;
+void updateServos() {
+    if (movingUp && verticalPos < MAX_ANGLE) {
+        verticalPos = min(verticalPos + STEP_SIZE, MAX_ANGLE);
+        verticalServo.write(verticalPos);
     }
-    if (deviceConnected && !oldDeviceConnected)
-    {
-        oldDeviceConnected = deviceConnected;
+    else if (movingDown && verticalPos > MIN_ANGLE) {
+        verticalPos = max(verticalPos - STEP_SIZE, MIN_ANGLE);
+        verticalServo.write(verticalPos);
     }
+    
+    if (movingLeft && horizontalPos < MAX_ANGLE) {
+        horizontalPos = min(horizontalPos + STEP_SIZE, MAX_ANGLE);
+        horizontalServo.write(horizontalPos);
+    }
+    else if (movingRight && horizontalPos > MIN_ANGLE) {
+        horizontalPos = max(horizontalPos - STEP_SIZE, MIN_ANGLE);
+        horizontalServo.write(horizontalPos);
+    }
+}
 
-    // Обновление по таймеру
-    unsigned long currentMillis = millis();
-    if (currentMillis - previousMillis >= interval)
-    {
-        previousMillis = currentMillis;
-
-        if (!isnan(t) && !isnan(h))
-        {
-            Serial.printf("Temp: %.2f°C, Hum: %.2f%%\n", "g", "g");
-
-            // Отправка по BLE
-            if (deviceConnected)
-            {
-               
-                dtostrf("g", 5, 2, tempStr);
-                dtostrf("g" 5, 2, humStr);
-            }
-            else
-            {
-                Serial.println("Нет подключения к устройству");
-            }
+void processCommand(String command) {
+    if (command.startsWith("L:") && command.indexOf(",R:") > 0) {
+        int lIndex = command.indexOf("L:") + 2;
+        int commaIndex = command.indexOf(",R:");
+        int rIndex = commaIndex + 3;
+        
+        if (lIndex > 1 && commaIndex > 0 && rIndex > 0) {
+            String leftStr = command.substring(lIndex, commaIndex);
+            String rightStr = command.substring(rIndex);
+            
+            int leftSpeed = constrain(leftStr.toInt(), -10, 10);
+            int rightSpeed = constrain(rightStr.toInt(), -10, 10);
+            
+            setMotorSpeeds(leftSpeed, rightSpeed);
+            Serial.print("[Моторы] L:");
+            Serial.print(leftSpeed);
+            Serial.print(" R:");
+            Serial.println(rightSpeed);
         }
-        else
-        {
-            Serial.println("Ошибка чтения данных с датчика");
-        }
+        return;
     }
+    
+    if (command == "LEFT_STOP") {
+        digitalWrite(MOTOR_A_1, LOW);
+        digitalWrite(MOTOR_A_2, LOW);
+        analogWrite(MOTOR_A_PWM, 0);
+        Serial.println("[Мотор] Левый остановлен");
+        return;
+    }
+    
+    if (command == "RIGHT_STOP") {
+        digitalWrite(MOTOR_B_1, LOW);
+        digitalWrite(MOTOR_B_2, LOW);
+        analogWrite(MOTOR_B_PWM, 0);
+        Serial.println("[Мотор] Правый остановлен");
+        return;
+    }
+    
+    if (command == "UPv") {
+        movingUp = true;
+        movingDown = false;
+        Serial.println("[Серво] Вертик вверх");
+        return;
+    }
+    if (command == "UPv_STOP") {
+        movingUp = false;
+        return;
+    }
+    
+    if (command == "DOWNv") {
+        movingDown = true;
+        movingUp = false;
+        Serial.println("[Серво] Вертик вниз");
+        return;
+    }
+    if (command == "DOWNv_STOP") {
+        movingDown = false;
+        return;
+    }
+    
+    if (command == "UPg") {
+        movingLeft = true;
+        movingRight = false;
+        Serial.println("[Серво] Гориз вверх");
+        return;
+    }
+    if (command == "UPg_STOP") {
+        movingLeft = false;
+        return;
+    }
+    
+    if (command == "DOWNg") {
+        movingRight = true;
+        movingLeft = false;
+        Serial.println("[Серво] Гориз вниз");
+        return;
+    }
+    if (command == "DOWNg_STOP") {
+        movingRight = false;
+        return;
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(1000);
+
+    SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, SS_PIN); 
+  
+    rfid.PCD_Init();
+  
+    byte v = rfid.PCD_ReadRegister(rfid.VersionReg);
+    Serial.print(F("Версия чипа: 0x"));
+    Serial.println(v, HEX);
+  
+    if (v == 0x00 || v == 0xFF) {
+        Serial.println(F("Модуль не обнаружен"));
+    } else {
+        Serial.println(F("RC522 найден"));
+    }
+    
+    verticalServo.attach(SERVO_VERTICAL);
+    horizontalServo.attach(SERVO_HORIZONTAL);
+    verticalServo.write(verticalPos);
+    horizontalServo.write(horizontalPos);
+
+    pinMode(MOTOR_A_PWM, OUTPUT);
+    pinMode(MOTOR_A_1, OUTPUT);
+    pinMode(MOTOR_A_2, OUTPUT);
+    pinMode(MOTOR_B_PWM, OUTPUT);
+    pinMode(MOTOR_B_1, OUTPUT);
+    pinMode(MOTOR_B_2, OUTPUT);
+
+    Serial.println("\n=== ESP32 Car Controller v2.0 ===");
+    
+    
+    
+    
+    
+    BLEDevice::init(DEVICE_NAME);
+    
+    pServer = BLEDevice::createServer();
+    pServer->setCallbacks(new MyServerCallbacks());
+    
+    BLEService *pService = pServer->createService(SERVICE_UUID);
+    
+    pCharacteristic = pService->createCharacteristic(
+                        CHARACTERISTIC_UUID,
+                        BLECharacteristic::PROPERTY_WRITE_NR |
+                        BLECharacteristic::PROPERTY_READ
+                      );
+    
+    pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+    pCharacteristic->addDescriptor(new BLE2902());
+    
+    pService->start();
+    
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(SERVICE_UUID);
+    pAdvertising->start();
+}
+
+void loop() {
+    if (deviceConnected) {
+        updateServos();
+    }
+    delay(10);
+
+    /*if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+        Serial.print(F("UID карты:"));
+        for (byte i = 0; i < rfid.uid.size; i++) {
+        Serial.print(rfid.uid.uidByte[i] < 0x10 ? " 0" : " ");
+        Serial.print(rfid.uid.uidByte[i], HEX);
+        }
+        Serial.println();
+        rfid.PICC_HaltA();
+        rfid.PCD_StopCrypto1();
+    }*/
 }
