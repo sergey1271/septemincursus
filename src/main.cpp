@@ -9,35 +9,38 @@
 
 #define SERVICE_UUID        "e3924aeb-5732-4cb9-9058-46ff8ffc686a"
 #define CHARACTERISTIC_UUID "9bfb5585-ee07-4bdf-b32d-5181fdb54c0a"
-#define DEVICE_NAME "ESP32_Car_7inc"
+#define DEVICE_NAME         "ESP32_Car_7inc"
 
-const int SS_PIN = 21;  // SDA
-const int RST_PIN = 4;   // Подключите RST к GPIO 4
-const int SCK_PIN = 17;  // пин для тактов
-const int MISO_PIN = 16;  // пин для данных (вход)
-const int MOSI_PIN = 23 ; // пин для данных (выход)
+//ПИНЫ ДЛЯ RFID-МОДУЛЯ
+const int SS_PIN   = 21; 
+const int RST_PIN  = 4;   
+const int SCK_PIN  = 18; 
+const int MISO_PIN = 19;  
+const int MOSI_PIN = 23; 
 
 MFRC522 rfid(SS_PIN, RST_PIN);
 
+//ПИНЫ ДЛЯ МОТОРОВ
 const int MOTOR_A_PWM = 33;
-const int MOTOR_A_1 = 26;
-const int MOTOR_A_2 = 25;
+const int MOTOR_A_1   = 26;
+const int MOTOR_A_2   = 25;
 const int MOTOR_B_PWM = 32;
-const int MOTOR_B_1 = 12;
-const int MOTOR_B_2 = 13;
+const int MOTOR_B_1   = 14;
+const int MOTOR_B_2   = 12;
 
-const int SERVO_VERTICAL = 19;
-const int SERVO_HORIZONTAL = 18;
+//ПИНЫ ДЛЯ СЕРВОПРИВОДОВ
+const int SERVO_VERTICAL = 16;
+const int SERVO_HORIZONTAL = 17;
 
-BLEServer *pServer = NULL;
-BLECharacteristic *pCharacteristic = NULL;
+BLEServer *pServer;
+BLECharacteristic *pCharacteristic;
 bool deviceConnected = false;
 
 // Сервоприводы
 Servo verticalServo;
 Servo horizontalServo;
-int verticalPos = 90;
-int horizontalPos = 90;
+int verticalPos = 0;
+int horizontalPos = 0;
 const int STEP_SIZE = 7;
 const int MIN_ANGLE = 0;
 const int MAX_ANGLE = 180;
@@ -52,7 +55,7 @@ void setMotorSpeeds(int left, int right);
 void updateServos();
 
 
-class MyServerCallbacks: public BLEServerCallbacks {
+class ServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
         deviceConnected = true;
         Serial.println("[BLE] Телефон подключен");
@@ -85,31 +88,33 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
 
 void setMotorSpeeds(int left, int right) {
     if (left > 0) {
-        digitalWrite(MOTOR_A_1, HIGH);
-        digitalWrite(MOTOR_A_2, LOW);
-        analogWrite(MOTOR_A_PWM, map(left, 0, 10, 0, 255));
-    } else if (left < 0) {
         digitalWrite(MOTOR_A_1, LOW);
         digitalWrite(MOTOR_A_2, HIGH);
+        analogWrite(MOTOR_A_PWM, map(left, 0, 10, 0, 255));
+    } else if (left < 0) {
+        digitalWrite(MOTOR_A_1, HIGH);
+        digitalWrite(MOTOR_A_2, LOW);
         analogWrite(MOTOR_A_PWM, map(-left, 0, 10, 0, 255));
     } else {
         digitalWrite(MOTOR_A_1, LOW);
         digitalWrite(MOTOR_A_2, LOW);
         analogWrite(MOTOR_A_PWM, 0);
+        Serial.println("[Мотор] Левый остановлен");
     }
     
     if (right > 0) {
-        digitalWrite(MOTOR_B_1, HIGH);
-        digitalWrite(MOTOR_B_2, LOW);
-        analogWrite(MOTOR_B_PWM, map(right, 0, 10, 0, 255));
-    } else if (right < 0) {
         digitalWrite(MOTOR_B_1, LOW);
         digitalWrite(MOTOR_B_2, HIGH);
+        analogWrite(MOTOR_B_PWM, map(right, 0, 10, 0, 255));
+    } else if (right < 0) {
+        digitalWrite(MOTOR_B_1, HIGH);
+        digitalWrite(MOTOR_B_2, LOW);
         analogWrite(MOTOR_B_PWM, map(-right, 0, 10, 0, 255));
     } else {
         digitalWrite(MOTOR_B_1, LOW);
         digitalWrite(MOTOR_B_2, LOW);
         analogWrite(MOTOR_B_PWM, 0);
+        Serial.println("[Мотор] Правый остановлен");
     }
 }
 
@@ -143,8 +148,8 @@ void processCommand(String command) {
             String leftStr = command.substring(lIndex, commaIndex);
             String rightStr = command.substring(rIndex);
             
-            int leftSpeed = constrain(leftStr.toInt(), -10, 10);
-            int rightSpeed = constrain(rightStr.toInt(), -10, 10);
+            int leftSpeed = leftStr.toInt();
+            int rightSpeed = rightStr.toInt();
             
             setMotorSpeeds(leftSpeed, rightSpeed);
             Serial.print("[Моторы] L:");
@@ -154,23 +159,7 @@ void processCommand(String command) {
         }
         return;
     }
-    
-    if (command == "LEFT_STOP") {
-        digitalWrite(MOTOR_A_1, LOW);
-        digitalWrite(MOTOR_A_2, LOW);
-        analogWrite(MOTOR_A_PWM, 0);
-        Serial.println("[Мотор] Левый остановлен");
-        return;
-    }
-    
-    if (command == "RIGHT_STOP") {
-        digitalWrite(MOTOR_B_1, LOW);
-        digitalWrite(MOTOR_B_2, LOW);
-        analogWrite(MOTOR_B_PWM, 0);
-        Serial.println("[Мотор] Правый остановлен");
-        return;
-    }
-    
+  
     if (command == "UPv") {
         movingUp = true;
         movingDown = false;
@@ -248,23 +237,12 @@ void setup() {
 
     Serial.println("\n=== ESP32 Car Controller v2.0 ===");
     
-    
-    
-    
-    
     BLEDevice::init(DEVICE_NAME);
     
     pServer = BLEDevice::createServer();
-    pServer->setCallbacks(new MyServerCallbacks());
-    
+    pServer->setCallbacks(new ServerCallbacks());
     BLEService *pService = pServer->createService(SERVICE_UUID);
-    
-    pCharacteristic = pService->createCharacteristic(
-                        CHARACTERISTIC_UUID,
-                        BLECharacteristic::PROPERTY_WRITE_NR |
-                        BLECharacteristic::PROPERTY_READ
-                      );
-    
+    pCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID,BLECharacteristic::PROPERTY_WRITE_NR | BLECharacteristic::PROPERTY_READ);
     pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
     pCharacteristic->addDescriptor(new BLE2902());
     
@@ -281,14 +259,22 @@ void loop() {
     }
     delay(10);
 
-    /*if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-        Serial.print(F("UID карты:"));
+    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+        String uid = "";
         for (byte i = 0; i < rfid.uid.size; i++) {
-        Serial.print(rfid.uid.uidByte[i] < 0x10 ? " 0" : " ");
-        Serial.print(rfid.uid.uidByte[i], HEX);
+            uid += String(rfid.uid.uidByte[i], HEX);
         }
-        Serial.println();
+        Serial.print("UID карты: ");
+        Serial.println(uid);
+        
+        // ДОБАВЬТЕ ОБРАБОТКУ КАРТЫ
+        if (uid == "ab12cd34") {  // Замените на ваш UID
+            setMotorSpeeds(10, 10);  // Едем вперед
+            delay(2000);
+            setMotorSpeeds(0, 0);    // Останавливаемся
+        }
+        
         rfid.PICC_HaltA();
         rfid.PCD_StopCrypto1();
-    }*/
+    }
 }
