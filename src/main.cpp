@@ -12,13 +12,17 @@
 #define DEVICE_NAME         "ESP32_Car_7inc"
 
 //ПИНЫ ДЛЯ RFID-МОДУЛЯ
-const int SS_PIN   = 21; 
-const int RST_PIN  = 4;   
+const int SS_PIN   = 5; 
 const int SCK_PIN  = 18; 
+const int MOSI_PIN = 23;
 const int MISO_PIN = 19;  
-const int MOSI_PIN = 23; 
+const int RST_PIN  = 22;   
 
 MFRC522 rfid(SS_PIN, RST_PIN);
+
+const int R_PIN = 13;
+const int G_PIN = 16;
+const int B_PIN = 17;
 
 //ПИНЫ ДЛЯ МОТОРОВ
 const int MOTOR_A_PWM = 33;
@@ -28,9 +32,16 @@ const int MOTOR_B_PWM = 32;
 const int MOTOR_B_1   = 14;
 const int MOTOR_B_2   = 12;
 
+int targetA = 0, currentA = 0;
+int targetB = 0, currentB = 0;
+unsigned long lastMotorUpdate = 0;
+const int motorStepDelay = 30;
+unsigned long lastServoUpdate = 0;
+const int servoStepDelay = 10;
+
 //ПИНЫ ДЛЯ СЕРВОПРИВОДОВ
-const int SERVO_VERTICAL = 16;
-const int SERVO_HORIZONTAL = 17;
+const int SERVO_VERTICAL =   2;
+const int SERVO_HORIZONTAL = 4;
 
 BLEServer *pServer;
 BLECharacteristic *pCharacteristic;
@@ -41,19 +52,15 @@ Servo verticalServo;
 Servo horizontalServo;
 int verticalPos = 0;
 int horizontalPos = 0;
-const int STEP_SIZE = 7;
+const int STEP_SIZE = 20;
 const int MIN_ANGLE = 0;
 const int MAX_ANGLE = 180;
 
-bool movingUp = false;
-bool movingDown = false;
-bool movingLeft = false;
-bool movingRight = false;
+bool movingUp, movingDown, movingLeft, movingRight;
 
 void processCommand(String command);
-void setMotorSpeeds(int left, int right);
+void setMotorSpeeds(int left = 100, int right = 100); 
 void updateServos();
-
 
 class ServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
@@ -61,24 +68,28 @@ class ServerCallbacks: public BLEServerCallbacks {
         Serial.println("[BLE] Телефон подключен");
     }
 
-    void onDisconnect(BLEServer* pServer) {
-        deviceConnected = false;
-        Serial.println("[BLE] Телефон отключен");
+   void onDisconnect(BLEServer* pServer) {
+       deviceConnected = false;
+       Serial.println("[BLE] Телефон отключен");
         
-        movingUp = false;
-        movingDown = false;
-        movingLeft = false;
-        movingRight = false;
-        setMotorSpeeds(0, 0);
+       movingUp = false;
+       movingDown = false;
+       movingLeft = false;
+       movingRight = false;
+       
+       targetA = 0; currentA = 0;
+       targetB = 0; currentB = 0;
+       digitalWrite(MOTOR_A_1, LOW); digitalWrite(MOTOR_A_2, LOW); analogWrite(MOTOR_A_PWM, 0);
+       digitalWrite(MOTOR_B_1, LOW); digitalWrite(MOTOR_B_2, LOW); analogWrite(MOTOR_B_PWM, 0);
         
-        pServer->getAdvertising()->start();
+       pServer->getAdvertising()->start();
     }
 };
 
 class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
         std::string value = pCharacteristic->getValue();
-        
+     
         if (value.length() > 0) {
             String command = String(value.c_str());
             processCommand(command);
@@ -87,122 +98,120 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
 };
 
 void setMotorSpeeds(int left, int right) {
-    if (left > 0) {
-        digitalWrite(MOTOR_A_1, LOW);
-        digitalWrite(MOTOR_A_2, HIGH);
-        analogWrite(MOTOR_A_PWM, map(left, 0, 10, 0, 255));
-    } else if (left < 0) {
-        digitalWrite(MOTOR_A_1, HIGH);
-        digitalWrite(MOTOR_A_2, LOW);
-        analogWrite(MOTOR_A_PWM, map(-left, 0, 10, 0, 255));
-    } else {
-        digitalWrite(MOTOR_A_1, LOW);
-        digitalWrite(MOTOR_A_2, LOW);
-        analogWrite(MOTOR_A_PWM, 0);
-        Serial.println("[Мотор] Левый остановлен");
+    if (left >= -10 && left <= 10 && right >= -10 && right <= 10) {
+        targetA = left;
+        targetB = right;
     }
-    
-    if (right > 0) {
-        digitalWrite(MOTOR_B_1, LOW);
-        digitalWrite(MOTOR_B_2, HIGH);
-        analogWrite(MOTOR_B_PWM, map(right, 0, 10, 0, 255));
-    } else if (right < 0) {
-        digitalWrite(MOTOR_B_1, HIGH);
-        digitalWrite(MOTOR_B_2, LOW);
-        analogWrite(MOTOR_B_PWM, map(-right, 0, 10, 0, 255));
-    } else {
-        digitalWrite(MOTOR_B_1, LOW);
-        digitalWrite(MOTOR_B_2, LOW);
-        analogWrite(MOTOR_B_PWM, 0);
-        Serial.println("[Мотор] Правый остановлен");
+    if (millis() - lastMotorUpdate >= motorStepDelay) {
+        lastMotorUpdate = millis();
+
+        if (currentA < targetA) currentA++;
+        else if (currentA > targetA) currentA--;
+
+        if (currentB < targetB) currentB++;
+        else if (currentB > targetB) currentB--;
+
+        if (currentA > 0) {
+            digitalWrite(MOTOR_A_1, LOW);
+            digitalWrite(MOTOR_A_2, HIGH);
+            analogWrite(MOTOR_A_PWM, map(currentA, 0, 10, 0, 255));
+        } else if (currentA < 0) {
+            digitalWrite(MOTOR_A_1, HIGH);
+            digitalWrite(MOTOR_A_2, LOW);
+            analogWrite(MOTOR_A_PWM, map(-currentA, 0, 10, 0, 255));
+        } else {
+            digitalWrite(MOTOR_A_1, LOW);
+            digitalWrite(MOTOR_A_2, LOW);
+            analogWrite(MOTOR_A_PWM, 0);
+        }
+        
+        if (currentB> 0) {
+            digitalWrite(MOTOR_B_1, LOW);
+            digitalWrite(MOTOR_B_2, HIGH);
+            analogWrite(MOTOR_B_PWM, map(currentB, 0, 10, 0, 255));
+        } else if (currentB < 0) {
+            digitalWrite(MOTOR_B_1, HIGH);
+            digitalWrite(MOTOR_B_2, LOW);
+            analogWrite(MOTOR_B_PWM, map(-currentB, 0, 10, 0, 255));
+        } else {
+            digitalWrite(MOTOR_B_1, LOW);
+            digitalWrite(MOTOR_B_2, LOW);
+            analogWrite(MOTOR_B_PWM, 0);
+        }
     }
+}
+
+void setServoSpeeds(int vert, int horz) {
+    if (vert == 1) {movingUp = true; movingDown = false;
+    } else if (vert == -1) {movingDown = true; movingUp = false;
+    } else {movingUp = false; movingDown = false;}
+
+    if (horz == 1) { movingLeft = true; movingRight = false;
+    } else if (horz == -1) { movingRight = true; movingLeft = false;
+    } else { movingLeft = false; movingRight = false;}
 }
 
 void updateServos() {
-    if (movingUp && verticalPos < MAX_ANGLE) {
-        verticalPos = min(verticalPos + STEP_SIZE, MAX_ANGLE);
-        verticalServo.write(verticalPos);
-    }
-    else if (movingDown && verticalPos > MIN_ANGLE) {
-        verticalPos = max(verticalPos - STEP_SIZE, MIN_ANGLE);
-        verticalServo.write(verticalPos);
-    }
-    
-    if (movingLeft && horizontalPos < MAX_ANGLE) {
-        horizontalPos = min(horizontalPos + STEP_SIZE, MAX_ANGLE);
-        horizontalServo.write(horizontalPos);
-    }
-    else if (movingRight && horizontalPos > MIN_ANGLE) {
-        horizontalPos = max(horizontalPos - STEP_SIZE, MIN_ANGLE);
-        horizontalServo.write(horizontalPos);
+    // Если есть команда на движение
+    if (movingUp || movingDown || movingLeft || movingRight) {
+        
+        // Подключаем сервоприводы обратно, если они были отключены
+        if (!verticalServo.attached()) verticalServo.attach(SERVO_VERTICAL);
+        if (!horizontalServo.attached()) horizontalServo.attach(SERVO_HORIZONTAL);
+
+        if (movingUp && verticalPos < MAX_ANGLE) {
+            verticalPos = min(verticalPos + STEP_SIZE, MAX_ANGLE);
+            verticalServo.write(verticalPos);
+        }
+        else if (movingDown && verticalPos > MIN_ANGLE) {
+            verticalPos = max(verticalPos - STEP_SIZE, MIN_ANGLE);
+            verticalServo.write(verticalPos);
+        }
+        
+        if (movingLeft && horizontalPos < MAX_ANGLE) {
+            horizontalPos = min(horizontalPos + STEP_SIZE, MAX_ANGLE);
+            horizontalServo.write(horizontalPos);
+        }
+        else if (movingRight && horizontalPos > MIN_ANGLE) {
+            horizontalPos = max(horizontalPos - STEP_SIZE, MIN_ANGLE);
+            horizontalServo.write(horizontalPos);
+        }
+    } 
+    else {
+        // Если кнопки отпущены - отключаем удержание, чтобы мотор не грелся
+        if (verticalServo.attached()) verticalServo.detach();
+        if (horizontalServo.attached()) horizontalServo.detach();
     }
 }
 
+
 void processCommand(String command) {
-    if (command.startsWith("L:") && command.indexOf(",R:") > 0) {
-        int lIndex = command.indexOf("L:") + 2;
-        int commaIndex = command.indexOf(",R:");
-        int rIndex = commaIndex + 3;
+    int lIdx = command.indexOf("L:");
+    int rIdx = command.indexOf(",R:");
+    int vIdx = command.indexOf(",V:");
+    int hIdx = command.indexOf(",H:");
+    
+    if (lIdx >= 0 && rIdx > 0 && vIdx > 0 && hIdx > 0) {
+        int left   = command.substring(lIdx+2, rIdx).toInt();
+        int right  = command.substring(rIdx+3, vIdx).toInt();
+        int vert   = command.substring(vIdx+3, hIdx).toInt();
+        int horz   = command.substring(hIdx+3).toInt();
         
-        if (lIndex > 1 && commaIndex > 0 && rIndex > 0) {
-            String leftStr = command.substring(lIndex, commaIndex);
-            String rightStr = command.substring(rIndex);
-            
-            int leftSpeed = leftStr.toInt();
-            int rightSpeed = rightStr.toInt();
-            
-            setMotorSpeeds(leftSpeed, rightSpeed);
-            Serial.print("[Моторы] L:");
-            Serial.print(leftSpeed);
-            Serial.print(" R:");
-            Serial.println(rightSpeed);
-        }
+        left  = constrain(left, -10, 10);
+        right = constrain(right, -10, 10);
+        vert  = constrain(vert, -1, 1);
+        horz  = constrain(horz, -1, 1);
+        
+        setMotorSpeeds(left, right);
+        setServoSpeeds(vert, horz);
         return;
     }
-  
-    if (command == "UPv") {
-        movingUp = true;
-        movingDown = false;
-        Serial.println("[Серво] Вертик вверх");
-        return;
-    }
-    if (command == "UPv_STOP") {
-        movingUp = false;
-        return;
-    }
-    
-    if (command == "DOWNv") {
-        movingDown = true;
-        movingUp = false;
-        Serial.println("[Серво] Вертик вниз");
-        return;
-    }
-    if (command == "DOWNv_STOP") {
-        movingDown = false;
-        return;
-    }
-    
-    if (command == "UPg") {
-        movingLeft = true;
-        movingRight = false;
-        Serial.println("[Серво] Гориз вверх");
-        return;
-    }
-    if (command == "UPg_STOP") {
-        movingLeft = false;
-        return;
-    }
-    
-    if (command == "DOWNg") {
-        movingRight = true;
-        movingLeft = false;
-        Serial.println("[Серво] Гориз вниз");
-        return;
-    }
-    if (command == "DOWNg_STOP") {
-        movingRight = false;
-        return;
-    }
+}
+
+void setColor(int r, int g, int b) {
+  analogWrite(R_PIN, r);
+  analogWrite(G_PIN, g);
+  analogWrite(B_PIN, b);
 }
 
 void setup() {
@@ -212,11 +221,13 @@ void setup() {
     SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, SS_PIN); 
   
     rfid.PCD_Init();
+
+    pinMode(R_PIN, OUTPUT);
+    pinMode(G_PIN, OUTPUT);
+    pinMode(B_PIN, OUTPUT);
+    setColor(0, 0, 0);
   
     byte v = rfid.PCD_ReadRegister(rfid.VersionReg);
-    Serial.print(F("Версия чипа: 0x"));
-    Serial.println(v, HEX);
-  
     if (v == 0x00 || v == 0xFF) {
         Serial.println(F("Модуль не обнаружен"));
     } else {
@@ -225,8 +236,6 @@ void setup() {
     
     verticalServo.attach(SERVO_VERTICAL);
     horizontalServo.attach(SERVO_HORIZONTAL);
-    verticalServo.write(verticalPos);
-    horizontalServo.write(horizontalPos);
 
     pinMode(MOTOR_A_PWM, OUTPUT);
     pinMode(MOTOR_A_1, OUTPUT);
@@ -257,24 +266,66 @@ void loop() {
     if (deviceConnected) {
         updateServos();
     }
-    delay(10);
-
-    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-        String uid = "";
-        for (byte i = 0; i < rfid.uid.size; i++) {
-            uid += String(rfid.uid.uidByte[i], HEX);
-        }
-        Serial.print("UID карты: ");
-        Serial.println(uid);
-        
-        // ДОБАВЬТЕ ОБРАБОТКУ КАРТЫ
-        if (uid == "ab12cd34") {  // Замените на ваш UID
-            setMotorSpeeds(10, 10);  // Едем вперед
-            delay(2000);
-            setMotorSpeeds(0, 0);    // Останавливаемся
-        }
-        
-        rfid.PICC_HaltA();
-        rfid.PCD_StopCrypto1();
+    
+    setMotorSpeeds(); 
+    
+    delay(1);
+    if ( ! rfid.PICC_IsNewCardPresent() || ! rfid.PICC_ReadCardSerial()) {
+        return;
     }
+
+    MFRC522::MIFARE_Key key;
+    for (byte i = 0; i < 6; i++) {
+      key.keyByte[i] = (i % 2 == 0) ? 0xD3 : 0xF7; 
+    }
+
+    byte blocksToRead[] = {4, 5, 6};
+    String nfcText = ""; 
+
+    for (int i = 0; i < 3; i++) {
+      byte blockAddr = blocksToRead[i];
+      byte buffer[18];
+      byte size = sizeof(buffer);
+
+      if (rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, blockAddr, &key, &(rfid.uid)) == MFRC522::STATUS_OK) {
+        if (rfid.MIFARE_Read(blockAddr, buffer, &size) == MFRC522::STATUS_OK) {
+          for (byte j = 0; j < 16; j++) {
+            if (buffer[j] >= 32 && buffer[j] <= 126) {
+              nfcText += (char)buffer[j];
+            }
+          }
+        }
+      }
+    }
+
+    if (nfcText.length() > 3) {
+      nfcText = nfcText.substring(3);
+      nfcText.trim();
+      nfcText.toLowerCase();
+
+      Serial.print(F("Распознан цвет: "));
+      Serial.println(nfcText);
+
+      // Базовые цвета
+      if (nfcText == "red")          setColor(255, 0, 0);
+      else if (nfcText == "green")   setColor(0, 255, 0);
+      else if (nfcText == "blue")    setColor(0, 0, 255);
+      else if (nfcText == "yellow")  setColor(255, 255, 0);
+      else if (nfcText == "white")   setColor(255, 255, 255);
+      else if (nfcText == "black" || nfcText == "off") setColor(0, 0, 0);
+
+      else if (nfcText == "orange")  setColor(255, 20, 0);   // Красный на максимум, немного зеленого
+      else if (nfcText == "pink")    setColor(255, 20, 100);  // Красный, немного синего и зеленого для нежности
+      else if (nfcText == "purple")  setColor(128, 0, 128);   // Половина красного, половина синего
+      else if (nfcText == "brown")   setColor(150, 50, 0);    // Темно-оранжевый (ближайшее к коричневому)
+      else if (nfcText == "grey" || nfcText == "gray") setColor(30, 30, 30); // Тусклый белый
+
+      else {
+        Serial.println(F("Неизвестный цвет! Светодиод выключен."));
+        setColor(0, 0, 0);
+      }
+    }
+
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
 }
