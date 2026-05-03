@@ -52,9 +52,9 @@ Servo verticalServo;
 Servo horizontalServo;
 int verticalPos = 0;
 int horizontalPos = 0;
-const int STEP_SIZE = 20;
+const int STEP_SIZE = 5;
 const int MIN_ANGLE = 0;
-const int MAX_ANGLE = 180;
+const int MAX_ANGLE = 63;
 
 bool movingUp, movingDown, movingLeft, movingRight;
 
@@ -114,11 +114,11 @@ void setMotorSpeeds(int left, int right) {
         if (currentA > 0) {
             digitalWrite(MOTOR_A_1, LOW);
             digitalWrite(MOTOR_A_2, HIGH);
-            analogWrite(MOTOR_A_PWM, map(currentA, 0, 10, 0, 255));
+            analogWrite(MOTOR_A_PWM, map(currentA, 0, 10, 0, 200));
         } else if (currentA < 0) {
             digitalWrite(MOTOR_A_1, HIGH);
             digitalWrite(MOTOR_A_2, LOW);
-            analogWrite(MOTOR_A_PWM, map(-currentA, 0, 10, 0, 255));
+            analogWrite(MOTOR_A_PWM, map(-currentA, 0, 10, 0, 200));
         } else {
             digitalWrite(MOTOR_A_1, LOW);
             digitalWrite(MOTOR_A_2, LOW);
@@ -128,11 +128,11 @@ void setMotorSpeeds(int left, int right) {
         if (currentB> 0) {
             digitalWrite(MOTOR_B_1, LOW);
             digitalWrite(MOTOR_B_2, HIGH);
-            analogWrite(MOTOR_B_PWM, map(currentB, 0, 10, 0, 255));
+            analogWrite(MOTOR_B_PWM, map(currentB, 0, 10, 0, 200));
         } else if (currentB < 0) {
             digitalWrite(MOTOR_B_1, HIGH);
             digitalWrite(MOTOR_B_2, LOW);
-            analogWrite(MOTOR_B_PWM, map(-currentB, 0, 10, 0, 255));
+            analogWrite(MOTOR_B_PWM, map(-currentB, 0, 10, 0, 200));
         } else {
             digitalWrite(MOTOR_B_1, LOW);
             digitalWrite(MOTOR_B_2, LOW);
@@ -152,37 +152,27 @@ void setServoSpeeds(int vert, int horz) {
 }
 
 void updateServos() {
-    // Если есть команда на движение
-    if (movingUp || movingDown || movingLeft || movingRight) {
-        
-        // Подключаем сервоприводы обратно, если они были отключены
-        if (!verticalServo.attached()) verticalServo.attach(SERVO_VERTICAL);
-        if (!horizontalServo.attached()) horizontalServo.attach(SERVO_HORIZONTAL);
-
-        if (movingUp && verticalPos < MAX_ANGLE) {
-            verticalPos = min(verticalPos + STEP_SIZE, MAX_ANGLE);
-            verticalServo.write(verticalPos);
-        }
-        else if (movingDown && verticalPos > MIN_ANGLE) {
-            verticalPos = max(verticalPos - STEP_SIZE, MIN_ANGLE);
-            verticalServo.write(verticalPos);
-        }
-        
-        if (movingLeft && horizontalPos < MAX_ANGLE) {
-            horizontalPos = min(horizontalPos + STEP_SIZE, MAX_ANGLE);
-            horizontalServo.write(horizontalPos);
-        }
-        else if (movingRight && horizontalPos > MIN_ANGLE) {
-            horizontalPos = max(horizontalPos - STEP_SIZE, MIN_ANGLE);
-            horizontalServo.write(horizontalPos);
-        }
-    } 
-    else {
-        // Если кнопки отпущены - отключаем удержание, чтобы мотор не грелся
-        if (verticalServo.attached()) verticalServo.detach();
-        if (horizontalServo.attached()) horizontalServo.detach();
+    if (movingUp) {
+        // verticalPos = min(verticalPos + STEP_SIZE, MAX_ANGLE);
+        verticalServo.write(180);
     }
-}
+    else if (movingDown) {
+        // verticalPos = max(verticalPos - STEP_SIZE, MIN_ANGLE);
+        verticalServo.write(0);
+    }
+    else {
+        verticalServo.write(90);
+    }
+    
+    if (movingLeft && horizontalPos < MAX_ANGLE) {
+        horizontalPos = min(horizontalPos + STEP_SIZE, MAX_ANGLE);
+        horizontalServo.write(horizontalPos);
+    }
+    else if (movingRight && horizontalPos > MIN_ANGLE) {
+        horizontalPos = max(horizontalPos - STEP_SIZE, MIN_ANGLE);
+        horizontalServo.write(horizontalPos);
+    }
+} 
 
 
 void processCommand(String command) {
