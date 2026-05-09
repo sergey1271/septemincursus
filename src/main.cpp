@@ -11,6 +11,8 @@
 #define CHARACTERISTIC_UUID "9bfb5585-ee07-4bdf-b32d-5181fdb54c0a"
 #define DEVICE_NAME         "ESP32_Car_7inc"
 
+const int REGIM=1;
+
 //ПИНЫ ДЛЯ RFID-МОДУЛЯ
 const int SS_PIN   = 5; 
 const int SCK_PIN  = 18; 
@@ -163,14 +165,27 @@ void updateServos() {
     else {
         verticalServo.write(90);
     }
-    
-    if (movingLeft && horizontalPos < MAX_ANGLE) {
-        horizontalPos = min(horizontalPos + STEP_SIZE, MAX_ANGLE);
-        horizontalServo.write(horizontalPos);
+    if (REGIM==0){
+        if (movingLeft && horizontalPos < MAX_ANGLE) {
+            horizontalPos = min(horizontalPos + STEP_SIZE, MAX_ANGLE);
+            horizontalServo.write(horizontalPos);
+        }
+        else if (movingRight && horizontalPos > MIN_ANGLE) {
+            horizontalPos = max(horizontalPos - STEP_SIZE, MIN_ANGLE);
+            horizontalServo.write(horizontalPos);
+        }
     }
-    else if (movingRight && horizontalPos > MIN_ANGLE) {
-        horizontalPos = max(horizontalPos - STEP_SIZE, MIN_ANGLE);
-        horizontalServo.write(horizontalPos);
+    else if (REGIM==1)
+    {
+        if (movingLeft) {
+            horizontalServo.write(180);
+        }
+        else if (movingRight) {
+            horizontalServo.write(0);
+        }
+        else {
+            horizontalServo.write(90);
+        }
     }
 } 
 
@@ -241,7 +256,12 @@ void setup() {
     pServer = BLEDevice::createServer();
     pServer->setCallbacks(new ServerCallbacks());
     BLEService *pService = pServer->createService(SERVICE_UUID);
-    pCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID,BLECharacteristic::PROPERTY_WRITE_NR | BLECharacteristic::PROPERTY_READ);
+    pCharacteristic = pService->createCharacteristic(
+        CHARACTERISTIC_UUID,
+        BLECharacteristic::PROPERTY_WRITE_NR | 
+        BLECharacteristic::PROPERTY_READ | 
+        BLECharacteristic::PROPERTY_NOTIFY
+    );
     pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
     pCharacteristic->addDescriptor(new BLE2902());
     
@@ -264,37 +284,33 @@ void loop() {
         return;
     }
 
-    MFRC522::MIFARE_Key key;
-    for (byte i = 0; i < 6; i++) {
-      key.keyByte[i] = (i % 2 == 0) ? 0xD3 : 0xF7; 
-    }
-
-    byte blocksToRead[] = {4, 5, 6};
     String nfcText = ""; 
-
-    for (int i = 0; i < 3; i++) {
-      byte blockAddr = blocksToRead[i];
-      byte buffer[18];
+    byte pagesToRead[] = {4, 8}; 
+    for (int i = 0; i < 2; i++) {
+      byte pageAddr = pagesToRead[i];
+      byte buffer[18]; 
       byte size = sizeof(buffer);
 
-      if (rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, blockAddr, &key, &(rfid.uid)) == MFRC522::STATUS_OK) {
-        if (rfid.MIFARE_Read(blockAddr, buffer, &size) == MFRC522::STATUS_OK) {
-          for (byte j = 0; j < 16; j++) {
-            if (buffer[j] >= 32 && buffer[j] <= 126) {
-              nfcText += (char)buffer[j];
-            }
+      if (rfid.MIFARE_Read(pageAddr, buffer, &size) == MFRC522::STATUS_OK) {
+        for (byte j = 0; j < 16; j++) {
+          if (buffer[j] >= 32 && buffer[j] <= 126) {
+            nfcText += (char)buffer[j];
           }
         }
       }
-    }
-
+    }  
     if (nfcText.length() > 3) {
-      nfcText = nfcText.substring(3);
+      nfcText = nfcText.substring(4);
       nfcText.trim();
       nfcText.toLowerCase();
 
       Serial.print(F("Распознан цвет: "));
       Serial.println(nfcText);
+
+      if (deviceConnected && pCharacteristic != nullptr) {
+          pCharacteristic->setValue(nfcText.c_str());
+          pCharacteristic->notify();
+      }
 
       // Базовые цвета
       if (nfcText == "red")          setColor(255, 0, 0);
@@ -309,13 +325,7 @@ void loop() {
       else if (nfcText == "purple")  setColor(128, 0, 128);   // Половина красного, половина синего
       else if (nfcText == "brown")   setColor(150, 50, 0);    // Темно-оранжевый (ближайшее к коричневому)
       else if (nfcText == "grey" || nfcText == "gray") setColor(30, 30, 30); // Тусклый белый
-
-      else {
-        Serial.println(F("Неизвестный цвет! Светодиод выключен."));
-        setColor(0, 0, 0);
-      }
     }
-
     rfid.PICC_HaltA();
     rfid.PCD_StopCrypto1();
 }
